@@ -2,11 +2,79 @@ package pubsub
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/eininst/flog"
+	"github.com/go-redis/redis/v8"
+	"log"
+	"net/url"
+	"runtime"
+	"strconv"
 	"time"
 )
 
-func ChunkArray[T any](arr []*T, size int) [][]*T {
-	var result [][]*T
+func CatchPanic() {
+	if r := recover(); r != nil {
+		// 捕获 panic 并打印堆栈信息
+		buf := make([]byte, 1024)
+		n := runtime.Stack(buf, false)
+		flog.Errorf("%s%v\nStack trace:\n%s%s\n", flog.Red, r, buf[:n], flog.Reset)
+	}
+}
+
+type RedisOptions struct {
+	Scheme   string
+	Addr     string
+	Password string
+	DB       int
+}
+
+func ParsedRedisURL(uri string) (*RedisOptions, error) {
+	parsedURL, err := url.Parse(uri)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Failed to parse Redis URL: %v", err))
+	}
+	scheme := parsedURL.Scheme
+	host := parsedURL.Hostname()
+	port := parsedURL.Port()
+	password, _ := parsedURL.User.Password()   // 获取密码
+	db, er := strconv.Atoi(parsedURL.Path[1:]) // 去掉前导斜杠并转换为整数
+	if er != nil {
+		return nil, errors.New(fmt.Sprintf("Failed to parse DB index: %v", err))
+	}
+
+	addr := fmt.Sprintf("%v:%v", host, port)
+
+	return &RedisOptions{
+		Scheme:   scheme,
+		Addr:     addr,
+		Password: password,
+		DB:       db,
+	}, nil
+}
+
+func NewRedisClient(uri string) *redis.Client {
+	opt, er := ParsedRedisURL(uri)
+	if er != nil {
+		log.Fatalf("%v%v%v", flog.Red, er.Error(), flog.Reset)
+	}
+
+	poolSize := 2048
+
+	rcli := redis.NewClient(&redis.Options{
+		Addr:               opt.Addr,
+		Password:           opt.Password,
+		DB:                 opt.DB,
+		PoolSize:           poolSize,
+		IdleTimeout:        -1,
+		IdleCheckFrequency: -1,
+	})
+
+	return rcli
+}
+
+func ChunkArray[T any](arr []T, size int) [][]T {
+	var result [][]T
 	for i := 0; i < len(arr); i += size {
 		// 计算当前子数组的结束索引
 		end := i + size
