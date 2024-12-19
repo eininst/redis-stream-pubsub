@@ -2,12 +2,10 @@ package pubsub
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"github.com/eininst/flog"
 	"github.com/go-redis/redis/v8"
 	"github.com/panjf2000/ants/v2"
-	"github.com/tidwall/gjson"
 	"os"
 	"os/signal"
 	"runtime"
@@ -18,11 +16,7 @@ import (
 
 type Context struct {
 	context.Context
-	Stream string
-	Group  string
-	Name   string
-	Msg    redis.XMessage
-	JSON   gjson.Result
+	*Msg
 }
 
 type Option struct {
@@ -30,15 +24,16 @@ type Option struct {
 }
 
 type Options struct {
-	Name       string
-	Group      string
-	Workers    int
-	ReadCount  int64
-	BlockTime  time.Duration
-	MaxRetries int64
-	Timeout    time.Duration
-
-	BatchSize int
+	Name             string
+	Group            string
+	Workers          int
+	ReadCount        int64
+	BlockTime        time.Duration
+	MaxRetries       int64
+	Timeout          time.Duration
+	XpendingInterval time.Duration
+	BatchSize        int
+	NoAck            bool
 }
 
 func (o *Options) Apply(opts []Option) {
@@ -95,6 +90,18 @@ func WithTimeout(timeout time.Duration) Option {
 	}}
 }
 
+func WithXpendingInterval(xpendingInterval time.Duration) Option {
+	return Option{F: func(o *Options) {
+		o.XpendingInterval = xpendingInterval
+	}}
+}
+
+func WithNoAck(noAck bool) Option {
+	return Option{F: func(o *Options) {
+		o.NoAck = noAck
+	}}
+}
+
 type Function func(ctx *Context) error
 
 type HandlerContext struct {
@@ -108,14 +115,13 @@ type Consumer interface {
 }
 
 type consumer struct {
-	Rcli     *redis.Client
+	rcli     *redis.Client
 	handlers []*HandlerContext
 	cancels  []context.CancelFunc
 	stop     chan int
 	options  *Options
 	pool     *ants.Pool
-
-	wg sync.WaitGroup
+	wg       sync.WaitGroup
 }
 
 func NewConsumer(uri string, opts ...Option) Consumer {
@@ -124,21 +130,23 @@ func NewConsumer(uri string, opts ...Option) Consumer {
 
 func NewConsumerWithClient(rcli *redis.Client, opts ...Option) Consumer {
 	options := &Options{
-		Name:       "CONSUMER",
-		Group:      "CONSUMER-GROUP",
-		Workers:    0,
-		ReadCount:  10,
-		BlockTime:  time.Second * 6,
-		MaxRetries: 0,
-		Timeout:    time.Second * 300,
-		BatchSize:  16,
+		Name:             "CONSUMER",
+		Group:            "CONSUMER-GROUP",
+		Workers:          0,
+		ReadCount:        10,
+		BlockTime:        time.Second * 6,
+		MaxRetries:       0,
+		Timeout:          time.Second * 300,
+		BatchSize:        16,
+		XpendingInterval: time.Second * 3,
+		NoAck:            false,
 	}
 	options.Apply(opts)
 
 	p, _ := ants.NewPool(options.Workers)
 
 	return &consumer{
-		Rcli:     rcli,
+		rcli:     rcli,
 		options:  options,
 		stop:     make(chan int, 1),
 		handlers: []*HandlerContext{},
@@ -158,26 +166,26 @@ func (c *consumer) Spin() {
 	ctx := context.Background()
 
 	for _, h := range c.handlers {
-		c.Rcli.XGroupCreateMkStream(ctx, h.Stream, c.options.Group, "0")
+		c.rcli.XGroupCreateMkStream(ctx, h.Stream, c.options.Group, "0")
 	}
 
 	chunkHandlers := ChunkArray(c.handlers, c.options.BatchSize)
 
-	for _, chunk := range chunkHandlers {
+	for _, handlers := range chunkHandlers {
 		ctxCancel, cancel := context.WithCancel(ctx)
 		c.cancels = append(c.cancels, cancel)
 
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			c.xread(ctxCancel, chunk)
+			c.xread(ctxCancel, handlers)
 		}()
 
-		if c.options.MaxRetries > 0 {
+		if !c.options.NoAck {
 			c.wg.Add(1)
 			go func() {
 				defer c.wg.Done()
-				c.xpending(ctxCancel, chunk)
+				c.xpending(ctxCancel, handlers)
 			}()
 		}
 	}
@@ -211,7 +219,10 @@ func (c *consumer) xread(ctx context.Context, handlers []*HandlerContext) {
 
 	for _, h := range handlers {
 		hmap[h.Stream] = h.Fc
-		streams = append(streams, h.Stream, ">")
+		streams = append(streams, h.Stream)
+	}
+	for range handlers {
+		streams = append(streams, ">")
 	}
 
 	var wg sync.WaitGroup
@@ -222,13 +233,13 @@ func (c *consumer) xread(ctx context.Context, handlers []*HandlerContext) {
 			wg.Wait()
 			return
 		default:
-			entries, err := c.Rcli.XReadGroup(ctx, &redis.XReadGroupArgs{
+			entries, err := c.rcli.XReadGroup(ctx, &redis.XReadGroupArgs{
 				Group:    c.options.Group,
 				Consumer: c.options.Name,
 				Streams:  streams,
 				Count:    c.options.ReadCount,
 				Block:    c.options.BlockTime,
-				NoAck:    false,
+				NoAck:    c.options.NoAck,
 			}).Result()
 
 			if err != nil {
@@ -237,7 +248,7 @@ func (c *consumer) xread(ctx context.Context, handlers []*HandlerContext) {
 				} else if errors.Is(err, context.Canceled) {
 					continue
 				} else {
-					time.Sleep(time.Second * 2)
+					time.Sleep(time.Second * 3)
 					continue
 				}
 			}
@@ -253,15 +264,13 @@ func (c *consumer) xread(ctx context.Context, handlers []*HandlerContext) {
 				}
 
 				for _, msg := range entry.Messages {
-					value, _ := json.Marshal(msg.Values)
-
 					hctx := &Context{
 						Context: ctx,
-						Stream:  entry.Stream,
-						Group:   c.options.Group,
-						Name:    c.options.Name,
-						Msg:     msg,
-						JSON:    gjson.ParseBytes(value),
+						Msg: &Msg{
+							ID:      msg.ID,
+							Stream:  entry.Stream,
+							Payload: msg.Values,
+						},
 					}
 
 					wg.Add(1)
@@ -275,14 +284,16 @@ func (c *consumer) xread(ctx context.Context, handlers []*HandlerContext) {
 								n := runtime.Stack(buf, false)
 								flog.Errorf("%s%v\nStack trace:\n%s%s\n", flog.Red, r, buf[:n], flog.Reset)
 							}
+
 							if c.options.MaxRetries <= 0 {
 								isAck = true
 							}
 
-							if isAck {
-								count, _ := c.Rcli.XAck(ctx, entry.Stream, c.options.Group, msg.ID).Result()
-								if count == 1 {
-									_ = c.Rcli.XDel(ctx, entry.Stream, msg.ID)
+							if isAck && !c.options.NoAck {
+								xerr := c.rcli.XAck(ctx, entry.Stream, c.options.Group, msg.ID).Err()
+								if xerr != nil {
+									flog.Errorf("error acknowledging after failed XAck for %v stream and %v message",
+										entry.Stream, msg.ID)
 								}
 							}
 						}()
@@ -304,16 +315,17 @@ func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
 	}
 
 	var wg sync.WaitGroup
+	ticker := time.NewTicker(c.options.XpendingInterval)
 
 	for {
 		select {
 		case <-ctx.Done():
 			wg.Wait()
 			return
-		default:
+		case <-ticker.C:
 			stream_list := []string{}
 
-			cmds, err := c.Rcli.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+			cmds, err := c.rcli.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 				for _, h := range c.handlers {
 					pipe.XPendingExt(ctx, &redis.XPendingExtArgs{
 						Stream: h.Stream,
@@ -334,7 +346,7 @@ func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
 					continue
 				} else {
 					flog.Error(err)
-					time.Sleep(time.Second * 2)
+					time.Sleep(time.Second * 3)
 					continue
 				}
 			}
@@ -355,9 +367,10 @@ func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
 				}
 
 				if len(xdel_ids) > 0 {
-					count, _ := c.Rcli.XAck(ctx, streamName, c.options.Group, xdel_ids...).Result()
-					if count > 0 {
-						c.Rcli.XDel(ctx, streamName, xdel_ids...)
+					err = c.rcli.XAck(ctx, streamName, c.options.Group, xdel_ids...).Err()
+					if err != nil {
+						flog.Errorf("error acknowledging after failed XAck for %v stream and %v message",
+							streamName, xdel_ids)
 					}
 				}
 
@@ -368,7 +381,7 @@ func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
 						continue
 					}
 
-					xmsgs, er := c.Rcli.XClaim(ctx, &redis.XClaimArgs{
+					xmsgs, er := c.rcli.XClaim(ctx, &redis.XClaimArgs{
 						Stream:   streamName,
 						Group:    c.options.Group,
 						Consumer: c.options.Name,
@@ -381,15 +394,14 @@ func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
 						continue
 					}
 					for _, msg := range xmsgs {
-						value, _ := json.Marshal(msg.Values)
 
 						hctx := &Context{
 							Context: ctx,
-							Stream:  streamName,
-							Group:   c.options.Group,
-							Name:    c.options.Name,
-							Msg:     msg,
-							JSON:    gjson.ParseBytes(value),
+							Msg: &Msg{
+								ID:      msg.ID,
+								Stream:  streamName,
+								Payload: msg.Values,
+							},
 						}
 
 						wg.Add(1)
@@ -405,9 +417,10 @@ func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
 								}
 
 								if isAck {
-									count, _ := c.Rcli.XAck(ctx, streamName, c.options.Group, msg.ID).Result()
-									if count == 1 {
-										_ = c.Rcli.XDel(ctx, streamName, msg.ID)
+									xerr := c.rcli.XAck(ctx, streamName, c.options.Group, msg.ID).Err()
+									if xerr != nil {
+										flog.Errorf("error acknowledging after failed XAck for %v stream and %v message",
+											streamName, msg.ID)
 									}
 								}
 							}()
@@ -419,8 +432,6 @@ func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
 					}
 				}
 			}
-
-			time.Sleep(time.Second * 3)
 		}
 	}
 }
