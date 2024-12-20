@@ -5,7 +5,6 @@ go 1.23.4
 require (
 	github.com/eininst/flog v1.0.0
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/google/uuid v1.6.0
 	github.com/panjf2000/ants/v2 v2.10.0
 )
 
