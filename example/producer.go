@@ -9,7 +9,7 @@ import (
 func main() {
 	p := pubsub.NewProducer("redis://localhost:6379/0", &pubsub.ProducerOptions{
 		MaxLen: 1024,
-		Approx: false,
+		Approx: true,
 	})
 
 	msg := &pubsub.Msg{
