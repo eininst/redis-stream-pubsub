@@ -7,10 +7,7 @@ import (
 )
 
 func main() {
-	p := pubsub.NewProducer("redis://localhost:6379/0", &pubsub.ProducerOptions{
-		MaxLen: 1024,
-		Approx: true,
-	})
+	p := pubsub.NewProducer("redis://localhost:6379/0")
 
 	msg := &pubsub.Msg{
 		Stream: "test",

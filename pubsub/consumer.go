@@ -238,12 +238,12 @@ func (c *consumer) Spin() {
 		}
 
 		<-quit
-		clog.Info(flog.YellowBold, "Shutdown...", flog.Reset)
+		clog.Infof("%vShutdown...%v", flog.YellowBold, flog.Reset)
 		c.Shutdown()
 	}()
 
 	<-c.stop
-	clog.Info(flog.GreenBold, "Graceful shutdown success!", flog.Reset)
+	clog.Infof("%vGraceful shutdown success!%v", flog.GreenBold, flog.Reset)
 }
 
 func (c *consumer) Shutdown() {
