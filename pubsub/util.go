@@ -9,7 +9,7 @@ import (
 	"strconv"
 )
 
-var REDIS_POOL_SIZE = 4096
+var REDIS_POOL_SIZE = 1024
 
 type Msg struct {
 	ID      string
