@@ -225,7 +225,7 @@ func (c *consumer) Spin() {
 		}
 
 		<-quit
-		clog.Printf("\033[33;1mShutdown...%v\033[0m")
+		clog.Printf("\033[33mShutdown...%v\033[0m")
 		c.Shutdown()
 	}()
 
