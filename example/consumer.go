@@ -3,13 +3,15 @@ package main
 import (
 	"github.com/eininst/redis-stream-pubsub/pubsub"
 	"log"
+	"time"
 )
 
 func main() {
-	cs := pubsub.NewConsumer("redis://localhost:6379/0")
+	cs := pubsub.NewConsumer("redis://localhost:6379/0",
+		pubsub.WithTimeout(time.Second*5))
 
 	cs.Handler("test", func(ctx *pubsub.Context) error {
-		log.Panicf("received test msg:%v", ctx.Payload)
+		log.Printf("received test msg:%v", ctx.Payload)
 		return nil
 	})
 

@@ -18,8 +18,8 @@ package main
 
 import (
 	"context"
-	"github.com/eininst/flog"
 	"github.com/eininst/redis-stream-pubsub/pubsub"
+	"log"
 )
 
 func main() {
@@ -35,10 +35,10 @@ func main() {
 	er := p.Publish(context.TODO(), msg)
 
 	if er != nil {
-		flog.Error(er)
+		log.Panic(er)
 	}
 
-	flog.Info(msg.ID)
+	log.Println(msg.ID)
 }
 ```
 
@@ -48,15 +48,15 @@ func main() {
 package main
 
 import (
-	"github.com/eininst/flog"
 	"github.com/eininst/redis-stream-pubsub/pubsub"
+	"log"
 )
 
 func main() {
 	cs := pubsub.NewConsumer("redis://localhost:6379/0")
 
 	cs.Handler("test", func(ctx *pubsub.Context) error {
-		flog.Infof("received test msg:%v", ctx.Payload)
+		log.Panicf("received test msg:%v", ctx.Payload)
 		return nil
 	})
 
@@ -65,11 +65,11 @@ func main() {
 ```
 
 ```text
-2024/12/20 16:38:34 [Spin] BatchSize=16 BlockTime=5s NoAck=false ReadCount=10 Workers=0
-2024/12/20 16:38:34 [Spin] MaxRetries=64 Timeout=5m0s Xpending=3s
-2024/12/20 16:38:34 [Spin] Start 1 goroutines to perform XRead from Redis...
-2024/12/20 16:38:34 [Spin] Start 1 goroutines to perform XPending from Redis...
-2024/12/20 16:38:34 [INFO] consumer.go:12 received test msg:map[name:hello]
+2024/12/21 01:05:07 [Spin] NoAck=false Workers=0 ReadCount=10 BlockTime=5s BatchSize=16
+2024/12/21 01:05:07 [Spin] Xpending=3s Timeout=5m0s MaxRetries=64
+2024/12/21 01:05:07 [Spin] Start 1 goroutines to perform XRead from Redis...
+2024/12/21 01:05:07 [Spin] Start 1 goroutines to perform XPending from Redis...
+2024/12/21 01:05:09 received test msg:map[name:hello]
 ```
 
 > Graceful Shutdown
