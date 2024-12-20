@@ -8,6 +8,7 @@ import (
 func main() {
 	cs := pubsub.NewConsumer("redis://localhost:6379/0",
 		pubsub.WithNoAck(true),
+		pubsub.WithWorkers(128),
 	)
 
 	cs.Handler("wwe", func(ctx *pubsub.Context) error {

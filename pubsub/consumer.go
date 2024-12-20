@@ -3,12 +3,14 @@ package pubsub
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/eininst/flog"
 	"github.com/go-redis/redis/v8"
 	"github.com/panjf2000/ants/v2"
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -34,6 +36,7 @@ type Options struct {
 	XpendingInterval time.Duration
 	BatchSize        int
 	NoAck            bool
+	Signals          []os.Signal
 }
 
 func (o *Options) Apply(opts []Option) {
@@ -54,9 +57,9 @@ func WithGroup(group string) Option {
 	}}
 }
 
-func WithWork(work int) Option {
+func WithWorkers(workers int) Option {
 	return Option{F: func(o *Options) {
-		o.Workers = work
+		o.Workers = workers
 	}}
 }
 
@@ -102,6 +105,12 @@ func WithNoAck(noAck bool) Option {
 	}}
 }
 
+func WithSignal(sig ...os.Signal) Option {
+	return Option{F: func(o *Options) {
+		o.Signals = sig
+	}}
+}
+
 type Function func(ctx *Context) error
 
 type HandlerContext struct {
@@ -122,9 +131,11 @@ type consumer struct {
 	options  *Options
 	pool     *ants.Pool
 	wg       sync.WaitGroup
+	signals  []os.Signal
 }
 
 func NewConsumer(uri string, opts ...Option) Consumer {
+
 	return NewConsumerWithClient(NewRedisClient(uri), opts...)
 }
 
@@ -134,8 +145,8 @@ func NewConsumerWithClient(rcli *redis.Client, opts ...Option) Consumer {
 		Group:            "CONSUMER-GROUP",
 		Workers:          0,
 		ReadCount:        10,
-		BlockTime:        time.Second * 6,
-		MaxRetries:       0,
+		BlockTime:        time.Second * 5,
+		MaxRetries:       64,
 		Timeout:          time.Second * 300,
 		BatchSize:        16,
 		XpendingInterval: time.Second * 3,
@@ -165,11 +176,36 @@ func (c *consumer) Handler(stream string, fc Function) {
 func (c *consumer) Spin() {
 	ctx := context.Background()
 
+	clog := flog.New(flog.Config{
+		Format: fmt.Sprintf("${time} %s[Spin]%s ${msg}${fields}", flog.GreenBold, flog.Reset),
+	})
+
+	logFields := flog.Fields{
+		"Workers":   c.options.Workers,
+		"NoAck":     c.options.NoAck,
+		"ReadCount": c.options.ReadCount,
+		"BlockTime": c.options.BlockTime,
+		"BatchSize": c.options.BatchSize,
+	}
+	clog.With(logFields).Infof("")
+
+	if !c.options.NoAck {
+		clog.With(flog.Fields{
+			"Xpending":   c.options.XpendingInterval,
+			"Timeout":    c.options.Timeout,
+			"MaxRetries": c.options.MaxRetries,
+		}).Infof("")
+	}
+
 	for _, h := range c.handlers {
 		c.rcli.XGroupCreateMkStream(ctx, h.Stream, c.options.Group, "0")
 	}
 
 	chunkHandlers := ChunkArray(c.handlers, c.options.BatchSize)
+
+	slog := flog.New(flog.Config{
+		Format: fmt.Sprintf("${time} %s[Streams]%s ${msg}${fields}", flog.GreenBold, flog.Reset),
+	})
 
 	for _, handlers := range chunkHandlers {
 		ctxCancel, cancel := context.WithCancel(ctx)
@@ -180,6 +216,13 @@ func (c *consumer) Spin() {
 			defer c.wg.Done()
 			c.xread(ctxCancel, handlers)
 		}()
+
+		names := []string{}
+		for _, h := range c.handlers {
+			names = append(names, h.Stream)
+		}
+		nameStr := strings.Join(names, ",")
+		slog.Info(nameStr)
 
 		if !c.options.NoAck {
 			c.wg.Add(1)
@@ -192,15 +235,20 @@ func (c *consumer) Spin() {
 
 	go func() {
 		quit := make(chan os.Signal)
-		signal.Notify(quit, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM)
+
+		if len(c.options.Signals) == 0 {
+			signal.Notify(quit, syscall.SIGTERM)
+		} else {
+			signal.Notify(quit, c.options.Signals...)
+		}
+
 		<-quit
-		flog.Info("Start shutdown...")
+		clog.Info(flog.YellowBold, "Shutdown...", flog.Reset)
 		c.Shutdown()
 	}()
 
 	<-c.stop
-
-	flog.Info("Graceful shutdown success!")
+	clog.Info(flog.GreenBold, "Graceful shutdown success!", flog.Reset)
 }
 
 func (c *consumer) Shutdown() {
@@ -248,6 +296,7 @@ func (c *consumer) xread(ctx context.Context, handlers []*HandlerContext) {
 				} else if errors.Is(err, context.Canceled) {
 					continue
 				} else {
+					flog.Error(err)
 					time.Sleep(time.Second * 3)
 					continue
 				}
@@ -345,7 +394,6 @@ func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
 				} else if errors.Is(err, context.Canceled) {
 					continue
 				} else {
-					flog.Error(err)
 					time.Sleep(time.Second * 3)
 					continue
 				}

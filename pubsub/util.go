@@ -10,6 +10,8 @@ import (
 	"strconv"
 )
 
+var REDIS_POOL_SIZE = 4096
+
 type Msg struct {
 	ID      string
 	Stream  string
@@ -67,7 +69,7 @@ func NewRedisClient(uri string) *redis.Client {
 		log.Fatalf("%v%v%v", flog.Red, er.Error(), flog.Reset)
 	}
 
-	poolSize := 4096
+	poolSize := REDIS_POOL_SIZE
 
 	rcli := redis.NewClient(&redis.Options{
 		Addr:     opt.Addr,
