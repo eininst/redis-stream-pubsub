@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var clog = log.New(os.Stderr, "\033[32;1m[Spin]\033[0m ", log.Lmsgprefix|log.Ldate|log.Ltime)
+var clog = log.New(os.Stderr, "\033[32m[Spin]\033[0m ", log.Lmsgprefix|log.Ldate|log.Ltime)
 
 type Context struct {
 	context.Context
