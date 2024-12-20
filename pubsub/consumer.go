@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -113,7 +112,7 @@ func WithSignal(sig ...os.Signal) Option {
 
 type Function func(ctx *Context) error
 
-type HandlerContext struct {
+type handlerFc struct {
 	Stream string
 	Fc     Function
 }
@@ -125,7 +124,7 @@ type Consumer interface {
 
 type consumer struct {
 	rcli     *redis.Client
-	handlers []*HandlerContext
+	handlers []*handlerFc
 	cancels  []context.CancelFunc
 	stop     chan int
 	options  *Options
@@ -160,14 +159,14 @@ func NewConsumerWithClient(rcli *redis.Client, opts ...Option) Consumer {
 		rcli:     rcli,
 		options:  options,
 		stop:     make(chan int, 1),
-		handlers: []*HandlerContext{},
+		handlers: []*handlerFc{},
 		cancels:  []context.CancelFunc{},
 		pool:     p,
 	}
 }
 
 func (c *consumer) Handler(stream string, fc Function) {
-	c.handlers = append(c.handlers, &HandlerContext{
+	c.handlers = append(c.handlers, &handlerFc{
 		Stream: stream,
 		Fc:     fc,
 	})
@@ -203,26 +202,22 @@ func (c *consumer) Spin() {
 
 	chunkHandlers := ChunkArray(c.handlers, c.options.BatchSize)
 
-	slog := flog.New(flog.Config{
-		Format: fmt.Sprintf("${time} %s[Streams]%s ${msg}${fields}", flog.GreenBold, flog.Reset),
-	})
+	clog.Infof("%vStart %s%v%s %sgoroutines to perform XRead from Redis...%v",
+		flog.Blue, flog.BlueBold, len(chunkHandlers), flog.Reset, flog.Blue, flog.Reset)
+	if !c.options.NoAck {
+		clog.Infof("%vStart %s%v%s %sgoroutines to perform XPending from Redis...%v",
+			flog.Blue, flog.BlueBold, len(chunkHandlers), flog.Reset, flog.Blue, flog.Reset)
+	}
 
-	for _, handlers := range chunkHandlers {
+	for i, handlers := range chunkHandlers {
 		ctxCancel, cancel := context.WithCancel(ctx)
 		c.cancels = append(c.cancels, cancel)
 
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			c.xread(ctxCancel, handlers)
+			c.xread(ctxCancel, i, handlers)
 		}()
-
-		names := []string{}
-		for _, h := range c.handlers {
-			names = append(names, h.Stream)
-		}
-		nameStr := strings.Join(names, ",")
-		slog.Info(nameStr)
 
 		if !c.options.NoAck {
 			c.wg.Add(1)
@@ -261,14 +256,14 @@ func (c *consumer) Shutdown() {
 	c.wg.Wait()
 }
 
-func (c *consumer) xread(ctx context.Context, handlers []*HandlerContext) {
+func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 	hmap := make(map[string]Function)
 	streams := []string{}
-
 	for _, h := range handlers {
 		hmap[h.Stream] = h.Fc
 		streams = append(streams, h.Stream)
 	}
+
 	for range handlers {
 		streams = append(streams, ">")
 	}
@@ -357,7 +352,7 @@ func (c *consumer) xread(ctx context.Context, handlers []*HandlerContext) {
 	}
 }
 
-func (c *consumer) xpending(ctx context.Context, handlers []*HandlerContext) {
+func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 	hmap := make(map[string]Function)
 	for _, h := range handlers {
 		hmap[h.Stream] = h.Fc

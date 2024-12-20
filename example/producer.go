@@ -18,6 +18,7 @@ func main() {
 			"name": "hello",
 		},
 	}
+
 	er := p.Publish(context.TODO(), msg)
 
 	if er != nil {
