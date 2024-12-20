@@ -24,7 +24,7 @@ var defaultProducerOptions = &ProducerOptions{
 }
 
 type producer struct {
-	Rcli    *redis.Client
+	rcli    *redis.Client
 	options *ProducerOptions
 }
 
@@ -39,7 +39,7 @@ func NewProducerWithClient(rcli *redis.Client, options ...*ProducerOptions) Prod
 	}
 
 	return &producer{
-		Rcli:    rcli,
+		rcli:    rcli,
 		options: opt,
 	}
 }
@@ -55,7 +55,7 @@ func (p *producer) Publish(ctx context.Context, msg *Msg) error {
 			fmt.Sprintf("Send msg Cannot be empty by Stream \"%s\"", msg.Stream))
 	}
 
-	id, er := p.Rcli.XAdd(ctx, &redis.XAddArgs{
+	id, er := p.rcli.XAdd(ctx, &redis.XAddArgs{
 		Stream: msg.Stream,
 		MaxLen: p.options.MaxLen,
 		Approx: p.options.Approx,
