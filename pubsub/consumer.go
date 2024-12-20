@@ -3,10 +3,9 @@ package pubsub
 import (
 	"context"
 	"errors"
-	"fmt"
-	"github.com/eininst/flog"
 	"github.com/go-redis/redis/v8"
 	"github.com/panjf2000/ants/v2"
+	"log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -14,6 +13,8 @@ import (
 	"syscall"
 	"time"
 )
+
+var clog = log.New(os.Stderr, "\033[32;1m[Spin]\033[0m ", log.Lmsgprefix|log.Ldate|log.Ltime)
 
 type Context struct {
 	context.Context
@@ -175,25 +176,13 @@ func (c *consumer) Handler(stream string, fc Function) {
 func (c *consumer) Spin() {
 	ctx := context.Background()
 
-	clog := flog.New(flog.Config{
-		Format: fmt.Sprintf("${time} %s[Spin]%s ${msg}${fields}", flog.GreenBold, flog.Reset),
-	})
-
-	logFields := flog.Fields{
-		"Workers":   c.options.Workers,
-		"NoAck":     c.options.NoAck,
-		"ReadCount": c.options.ReadCount,
-		"BlockTime": c.options.BlockTime,
-		"BatchSize": c.options.BatchSize,
-	}
-	clog.With(logFields).Infof("")
+	clog.Printf("NoAck=%v Workers=%v ReadCount=%v BlockTime=%v BatchSize=%v",
+		c.options.NoAck, c.options.Workers, c.options.ReadCount, c.options.BlockTime, c.options.BatchSize)
 
 	if !c.options.NoAck {
-		clog.With(flog.Fields{
-			"Xpending":   c.options.XpendingInterval,
-			"Timeout":    c.options.Timeout,
-			"MaxRetries": c.options.MaxRetries,
-		}).Infof("")
+
+		clog.Printf("Xpending=%v Timeout=%v MaxRetries=%v",
+			c.options.XpendingInterval, c.options.Timeout, c.options.MaxRetries)
 	}
 
 	for _, h := range c.handlers {
@@ -202,11 +191,9 @@ func (c *consumer) Spin() {
 
 	chunkHandlers := ChunkArray(c.handlers, c.options.BatchSize)
 
-	clog.Infof("%vStart %s%v%s %sgoroutines to perform XRead from Redis...%v",
-		flog.Blue, flog.BlueBold, len(chunkHandlers), flog.Reset, flog.Blue, flog.Reset)
+	clog.Printf("Start %v goroutines to perform XRead from Redis...", len(chunkHandlers))
 	if !c.options.NoAck {
-		clog.Infof("%vStart %s%v%s %sgoroutines to perform XPending from Redis...%v",
-			flog.Blue, flog.BlueBold, len(chunkHandlers), flog.Reset, flog.Blue, flog.Reset)
+		clog.Printf("Start %v goroutines to perform XPending from Redis...", len(chunkHandlers))
 	}
 
 	for i, handlers := range chunkHandlers {
@@ -238,12 +225,12 @@ func (c *consumer) Spin() {
 		}
 
 		<-quit
-		clog.Infof("%vShutdown...%v", flog.YellowBold, flog.Reset)
+		clog.Printf("\033[33;1mShutdown...%v\033[0m")
 		c.Shutdown()
 	}()
 
 	<-c.stop
-	clog.Infof("%vGraceful shutdown success!%v", flog.GreenBold, flog.Reset)
+	clog.Printf("\033[32mGraceful shutdown success!\033[0m")
 }
 
 func (c *consumer) Shutdown() {
@@ -259,6 +246,7 @@ func (c *consumer) Shutdown() {
 func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 	hmap := make(map[string]Function)
 	streams := []string{}
+
 	for _, h := range handlers {
 		hmap[h.Stream] = h.Fc
 		streams = append(streams, h.Stream)
@@ -291,7 +279,8 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 				} else if errors.Is(err, context.Canceled) {
 					continue
 				} else {
-					flog.Error(err)
+					clog.Printf("\033[31m%v\033[0m", err)
+
 					time.Sleep(time.Second * 3)
 					continue
 				}
@@ -303,7 +292,7 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 			for _, entry := range entries {
 				fc, exists := hmap[entry.Stream]
 				if !exists {
-					flog.Errorf("Stream %s not found handler", entry.Stream)
+					clog.Printf("\033[31mStream %s not found handler\033[0m", entry.Stream)
 					continue
 				}
 
@@ -326,7 +315,7 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 								isAck = false
 								buf := make([]byte, 1024)
 								n := runtime.Stack(buf, false)
-								flog.Errorf("%s%v\nStack trace:\n%s%s\n", flog.Red, r, buf[:n], flog.Reset)
+								clog.Printf("%s%v\nStack trace:\n%s%s\n", "\033[31m", r, buf[:n], "\033[0m")
 							}
 
 							if c.options.MaxRetries <= 0 {
@@ -336,7 +325,7 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 							if isAck && !c.options.NoAck {
 								xerr := c.rcli.XAck(ctx, entry.Stream, c.options.Group, msg.ID).Err()
 								if xerr != nil {
-									flog.Errorf("error acknowledging after failed XAck for %v stream and %v message",
+									clog.Printf("\033[31merror acknowledging after failed XAck for %v stream and %v message\033[0m",
 										entry.Stream, msg.ID)
 								}
 							}
@@ -412,7 +401,7 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 				if len(xdel_ids) > 0 {
 					err = c.rcli.XAck(ctx, streamName, c.options.Group, xdel_ids...).Err()
 					if err != nil {
-						flog.Errorf("error acknowledging after failed XAck for %v stream and %v message",
+						clog.Printf("\033[31merror acknowledging after failed XAck for %v stream and %v message\033[0m",
 							streamName, xdel_ids)
 					}
 				}
@@ -420,7 +409,7 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 				if len(xclaim_ids) > 0 {
 					fc, exists := hmap[streamName]
 					if !exists {
-						flog.Errorf("Stream %s not found handler", streamName)
+						clog.Printf("\033[35mStream %s not found handler\033[0m", streamName)
 						continue
 					}
 
@@ -433,11 +422,10 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 					}).Result()
 
 					if er != nil {
-						flog.Error("XRangeN Error:", er)
+						clog.Printf("\033[31mXRangeN Error:%v\033[0m", er)
 						continue
 					}
 					for _, msg := range xmsgs {
-
 						hctx := &Context{
 							Context: ctx,
 							Msg: &Msg{
@@ -456,13 +444,13 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 									isAck = false
 									buf := make([]byte, 1024)
 									n := runtime.Stack(buf, false)
-									flog.Errorf("%s%v\nStack trace:\n%s%s\n", flog.Red, r, buf[:n], flog.Reset)
+									clog.Printf("%s%v\nStack trace:\n%s%s\n", "\033[31m", r, buf[:n], "\033[0m")
 								}
 
 								if isAck {
 									xerr := c.rcli.XAck(ctx, streamName, c.options.Group, msg.ID).Err()
 									if xerr != nil {
-										flog.Errorf("error acknowledging after failed XAck for %v stream and %v message",
+										clog.Printf("\033[31merror acknowledging after failed XAck for %v stream and %v message\033[0m",
 											streamName, msg.ID)
 									}
 								}

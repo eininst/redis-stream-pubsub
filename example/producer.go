@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"github.com/eininst/flog"
 	"github.com/eininst/redis-stream-pubsub/pubsub"
+	"log"
 )
 
 func main() {
@@ -19,8 +19,8 @@ func main() {
 	er := p.Publish(context.TODO(), msg)
 
 	if er != nil {
-		flog.Error(er)
+		log.Panic(er)
 	}
 
-	flog.Info(msg.ID)
+	log.Println(msg.ID)
 }

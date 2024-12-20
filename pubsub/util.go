@@ -3,7 +3,6 @@ package pubsub
 import (
 	"errors"
 	"fmt"
-	"github.com/eininst/flog"
 	"github.com/go-redis/redis/v8"
 	"log"
 	"net/url"
@@ -66,7 +65,7 @@ func ParsedRedisURL(uri string) (*RedisOptions, error) {
 func NewRedisClient(uri string) *redis.Client {
 	opt, er := ParsedRedisURL(uri)
 	if er != nil {
-		log.Fatalf("%v%v%v", flog.Red, er.Error(), flog.Reset)
+		log.Fatalf("%v%v%v", "\033[31m", er.Error(), "\033[0m")
 	}
 
 	poolSize := REDIS_POOL_SIZE
