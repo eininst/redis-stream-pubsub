@@ -121,6 +121,7 @@ type handlerFc struct {
 type Consumer interface {
 	Handler(stream string, fc Function)
 	Spin()
+	Shutdown()
 }
 
 type consumer struct {
