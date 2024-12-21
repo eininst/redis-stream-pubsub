@@ -216,7 +216,7 @@ func (c *consumer) Spin() {
 	}
 
 	go func() {
-		quit := make(chan os.Signal)
+		quit := make(chan os.Signal, 1)
 
 		if len(c.options.Signals) == 0 {
 			signal.Notify(quit, syscall.SIGTERM)
