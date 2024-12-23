@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/eininst/redis-stream-pubsub/pubsub"
+	"syscall"
 )
 
 // 处理消息的函数
@@ -23,7 +24,8 @@ func handleMsg(ctx *pubsub.Context) error {
 func main() {
 	// 1. 创建一个 Consumer
 	consumer := pubsub.NewConsumer("redis://localhost:6379/0",
-		pubsub.WithWorkers(32), // 使用 ants 协程池，worker 数量为 5
+		pubsub.WithWorkers(32),                              // 使用 ants 协程池，worker 数量为 5
+		pubsub.WithSignals(syscall.SIGINT, syscall.SIGTERM), //默认SIGTERM,
 	)
 
 	// 2. 注册消息处理函数

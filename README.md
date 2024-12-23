@@ -116,10 +116,11 @@ func handleMsg(ctx *pubsub.Context) error {
 
 func main() {
     // 1. 创建 Consumer
-    consumer := pubsub.NewConsumer("redis://localhost:6379/0",
-        pubsub.WithWorkers(32),           // 函数处理(ants 协程池大小)，默认0不限制
-        //pubsub.WithXXXX(), 
-    )
+   // 1. 创建一个 Consumer
+   consumer := pubsub.NewConsumer("redis://localhost:6379/0",
+      pubsub.WithWorkers(32), // 使用 ants 协程池，worker 数量为 5
+      pubsub.WithSignals(syscall.SIGINT, syscall.SIGTERM), //默认SIGTERM,
+   )
 
     // 2. 注册 Handler (Stream + 函数)
     consumer.Handler("test_stream", handleMsg)
@@ -144,7 +145,7 @@ Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello fiel
 * `WithWorkers`: 并发协程数量（由 `ants` 池控制）, 默认`0`
 * `WithReadCount`: 每次 XReadGroup 拉取的消息数, 默认`10`
 * `WithBlockTime`: 拉取消息的阻塞时间, 默认`5s`
-* `WithBatchSize`: 将多个 Handler 分批启动 Goroutine, 默认`16`
+* `WithBatchSize`: 将多个 Handler 分批启动 Goroutine(分组批量读取Stream), 默认`16`个为一组
 * `WithXpendingInterval`: 定期检查 Pending 消息的时间间隔, 默认`3s`
 * `WithTimeout`: 用于 Pending 消息的 MinIdleTime，超时可能会触发 XClaim, 默认`300s`
 * `WithMaxRetries`: 若消息被重试次数超过此值，自动 XAck 并丢弃, 默认`64`

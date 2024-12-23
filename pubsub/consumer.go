@@ -106,7 +106,7 @@ func WithNoAck(noAck bool) Option {
 	}}
 }
 
-func WithSignal(sig ...os.Signal) Option {
+func WithSignals(sig ...os.Signal) Option {
 	return Option{F: func(o *Options) {
 		o.Signals = sig
 	}}
@@ -245,7 +245,7 @@ func (c *consumer) Spin() {
 
 // Shutdown 优雅退出
 func (c *consumer) Shutdown() {
-	defer func() { c.stop <- 1 }()
+	defer func() { close(c.stop) }()
 
 	// 关闭协程池
 	defer c.pool.Release()
