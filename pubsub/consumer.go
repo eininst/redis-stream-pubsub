@@ -189,7 +189,6 @@ func (c *consumer) Spin() {
 		c.options.NoAck, c.options.Workers, c.options.ReadCount, c.options.BlockTime, c.options.BatchSize)
 
 	if !c.options.NoAck {
-
 		clog.Printf("Xpending=%v Timeout=%v MaxRetries=%v",
 			c.options.XpendingInterval, c.options.Timeout, c.options.MaxRetries)
 	}
