@@ -118,7 +118,7 @@ func main() {
     // 1. 创建 Consumer
    // 1. 创建一个 Consumer
    consumer := pubsub.NewConsumer("redis://localhost:6379/0",
-      pubsub.WithWorkers(32), // 使用 ants 协程池，worker 数量为 5
+      pubsub.WithWorkers(32), // ants 协程池数量, 默认0(不限制)
       pubsub.WithSignals(syscall.SIGINT, syscall.SIGTERM), //默认SIGTERM,
    )
 
