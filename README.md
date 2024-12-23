@@ -159,5 +159,5 @@ Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello fiel
 * PR: 修复 Bug 或实现新特性后，可发起 Pull Request 贡献给社区
 
 
-### License
+## License
 本项目基于 MIT License 进行分发和使用。你可以在遵守许可协议的前提下自由地修改、使用和二次分发。
