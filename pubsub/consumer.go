@@ -259,7 +259,7 @@ func (c *consumer) Shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), c.options.ExitWaitTime)
 	defer cancel()
 
-	done := make(chan struct{})
+	done := make(chan struct{}, 1)
 	go func() {
 		c.wg.Wait()
 		close(done)
