@@ -68,7 +68,7 @@ func main() {
     }
 
     // 3. 发送消息到 Redis Stream
-    err := p.Publish(context.Background(), msg)
+    err := p.Publish(context.TODO(), msg)
     if err != nil {
         fmt.Println("Publish error:", err)
     } else {
