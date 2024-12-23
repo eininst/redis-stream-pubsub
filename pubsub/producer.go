@@ -2,7 +2,6 @@ package pubsub
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/go-redis/redis/v8"
 )
@@ -45,16 +44,12 @@ func NewProducerWithClient(rcli *redis.Client, options ...*ProducerOptions) Prod
 }
 
 func (p *producer) Publish(ctx context.Context, msg *Msg) error {
-	if msg.Payload == nil {
-		return errors.New(
-			fmt.Sprintf("Send msg Cannot be empty by Stream \"%s\"", msg.Stream))
+	// 1. 校验 Payload
+	if msg.Payload == nil || len(msg.Payload) == 0 {
+		return fmt.Errorf("Send msg cannot be empty by stream %q", msg.Stream)
 	}
 
-	if len(msg.Payload) == 0 {
-		return errors.New(
-			fmt.Sprintf("Send msg Cannot be empty by Stream \"%s\"", msg.Stream))
-	}
-
+	// 2. 执行 XAdd
 	id, er := p.rcli.XAdd(ctx, &redis.XAddArgs{
 		Stream: msg.Stream,
 		MaxLen: p.options.MaxLen,
@@ -66,6 +61,7 @@ func (p *producer) Publish(ctx context.Context, msg *Msg) error {
 		return er
 	}
 
+	// 3. 回写 ID
 	msg.ID = id
 
 	return nil
