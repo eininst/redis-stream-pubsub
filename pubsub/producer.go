@@ -49,6 +49,14 @@ func (p *producer) Publish(ctx context.Context, msg *Msg) error {
 		return fmt.Errorf("Send msg cannot be empty by stream %q", msg.Stream)
 	}
 
+	select {
+	case <-ctx.Done():
+		// 如果外部已经cancel或超时，此时不必再进行任何操作
+		return ctx.Err()
+	default:
+		// 继续
+	}
+
 	// 2. 执行 XAdd
 	id, er := p.rcli.XAdd(ctx, &redis.XAddArgs{
 		Stream: msg.Stream,
