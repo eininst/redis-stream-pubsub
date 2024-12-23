@@ -118,8 +118,7 @@ func main() {
     // 1. 创建 Consumer
     consumer := pubsub.NewConsumer("redis://localhost:6379/0",
         pubsub.WithWorkers(32),           // 函数处理(ants 协程池大小)，默认0不限制
-        //pubsub.pubsub.WithXXXX(), 
-        //...
+        //pubsub.WithXXXX(), 
     )
 
     // 2. 注册 Handler (Stream + 函数)
