@@ -2,25 +2,31 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/eininst/redis-stream-pubsub/pubsub"
-	"log"
 )
 
 func main() {
-	p := pubsub.NewProducer("redis://localhost:6379/0")
+	// 1. 创建一个 Producer
+	producer := pubsub.NewProducer("redis://localhost:6379/0")
+	// 或者 pubsub.NewProducerWithClient(...) 注入自定义 redis.Client
 
+	// 2. 构建要发送的消息
 	msg := &pubsub.Msg{
-		Stream: "test",
+		Stream: "test_stream",
 		Payload: pubsub.H{
-			"name": "hello",
+			"field1": "hello",
+			"field2": 123,
 		},
 	}
 
-	er := p.Publish(context.TODO(), msg)
-
-	if er != nil {
-		log.Panic(er)
+	// 3. 发送消息到 Redis Stream
+	err := producer.Publish(context.Background(), msg)
+	if err != nil {
+		fmt.Println("Publish error:", err)
+		return
 	}
 
-	log.Println(msg.ID)
+	// msg.ID 中将会包含 Redis 生成的消息ID
+	fmt.Printf("Publish success! ID=%v\n", msg.ID)
 }

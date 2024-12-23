@@ -1,19 +1,36 @@
 package main
 
 import (
+	"fmt"
 	"github.com/eininst/redis-stream-pubsub/pubsub"
-	"log"
-	"syscall"
 )
 
+// 处理消息的函数
+func handleMsg(ctx *pubsub.Context) error {
+	// 解析消息
+	stream := ctx.Msg.Stream
+	id := ctx.Msg.ID
+	payload := ctx.Msg.Payload
+
+	// 业务逻辑
+	fmt.Printf("Consume from stream=%s ID=%s payload=%v\n", stream, id, payload)
+
+	// 返回 error 则会触发 panic -> recover -> 不进行 XAck，消息进入 pending
+	// 返回 nil 则表示消费成功，会执行 XAck
+	return nil
+}
+
 func main() {
-	cs := pubsub.NewConsumer("redis://localhost:6379/0",
-		pubsub.WithSignal(syscall.SIGTERM, syscall.SIGINT))
+	// 1. 创建一个 Consumer
+	consumer := pubsub.NewConsumer("redis://localhost:6379/0",
+		pubsub.WithWorkers(32), // 使用 ants 协程池，worker 数量为 5
+	)
 
-	cs.Handler("test", func(ctx *pubsub.Context) error {
-		log.Printf("received test msg:%v", ctx.Payload)
-		return nil
-	})
+	// 2. 注册消息处理函数
+	consumer.Handler("test_stream", handleMsg)
 
-	cs.Spin()
+	// 3. 启动消费，阻塞等待消息
+	consumer.Spin()
+
+	// 当捕捉到退出信号或手动调用 Shutdown()，会优雅停止
 }
