@@ -31,10 +31,10 @@ func NewProducer(uri string, options ...*ProducerOptions) Producer {
 	return NewProducerWithClient(NewRedisClient(uri), options...)
 }
 
-func NewProducerWithClient(rcli *redis.Client, options ...*ProducerOptions) Producer {
-	var opt = defaultProducerOptions
-	if len(options) > 0 {
-		opt = options[0]
+func NewProducerWithClient(rcli *redis.Client, opts ...*ProducerOptions) Producer {
+	opt := defaultProducerOptions
+	if len(opts) > 0 && opts[0] != nil {
+		opt = opts[0]
 	}
 
 	return &producer{
