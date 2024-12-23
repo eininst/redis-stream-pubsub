@@ -150,7 +150,6 @@ Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello fiel
 * `WithTimeout`: 用于 Pending 消息的 MinIdleTime，超时可能会触发 XClaim, 默认`300s`
 * `WithMaxRetries`: 若消息被重试次数超过此值，自动 XAck 并丢弃, 默认`64`
 
-***
 
 > See [example](/example)
 
