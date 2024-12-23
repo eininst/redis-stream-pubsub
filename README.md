@@ -56,7 +56,7 @@ import (
 
 func main() {
     // 1. 创建 Producer
-    producer := pubsub.NewProducer("redis://localhost:6379/0") // 或者 NewProducerWithClient(...)
+    p := pubsub.NewProducer("redis://localhost:6379/0") // 或者 NewProducerWithClient(...)
     
     // 2. 准备要发送的消息
     msg := &pubsub.Msg{
@@ -68,7 +68,7 @@ func main() {
     }
 
     // 3. 发送消息到 Redis Stream
-    err := producer.Publish(context.Background(), msg)
+    err := p.Publish(context.Background(), msg)
     if err != nil {
         fmt.Println("Publish error:", err)
     } else {
