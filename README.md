@@ -145,7 +145,7 @@ Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello fiel
 * `WithWorkers`: 并发协程数量（由 `ants` 池控制）, 默认`0`
 * `WithReadCount`: 每次 XReadGroup 拉取的消息数, 默认`10`
 * `WithBlockTime`: 拉取消息的阻塞时间, 默认`5s`
-* `WithBatchSize`: 将多个 Handler 分批启动 Goroutine(分组批量读取Stream), 默认`16`个为一组
+* `WithBatchSize`: 将多个 Handler 分批启动 Goroutine (分组批量读取`Stream`), 默认`16`个为一组
 * `WithXpendingInterval`: 定期检查 Pending 消息的时间间隔, 默认`3s`
 * `WithTimeout`: 用于 Pending 消息的 MinIdleTime，超时可能会触发 XClaim, 默认`300s`
 * `WithMaxRetries`: 若消息被重试次数超过此值，自动 XAck 并丢弃, 默认`64`
