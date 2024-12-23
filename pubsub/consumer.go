@@ -37,6 +37,7 @@ type Options struct {
 	BatchSize        int
 	NoAck            bool
 	Signals          []os.Signal
+	ExitWaitTime     time.Duration
 }
 
 func (o *Options) Apply(opts []Option) {
@@ -111,6 +112,12 @@ func WithSignal(sig ...os.Signal) Option {
 	}}
 }
 
+func WithExitWaitTime(exitWaitTime time.Duration) Option {
+	return Option{F: func(o *Options) {
+		o.ExitWaitTime = exitWaitTime
+	}}
+}
+
 type Function func(ctx *Context) error
 
 type handlerFc struct {
@@ -152,6 +159,7 @@ func NewConsumerWithClient(rcli *redis.Client, opts ...Option) Consumer {
 		BatchSize:        16,
 		XpendingInterval: time.Second * 3,
 		NoAck:            false,
+		ExitWaitTime:     time.Second * 10,
 	}
 	options.Apply(opts)
 
@@ -197,14 +205,14 @@ func (c *consumer) Spin() {
 		clog.Printf("Start %v goroutines to perform XPending from Redis...", len(chunkHandlers))
 	}
 
-	for i, handlers := range chunkHandlers {
+	for _, handlers := range chunkHandlers {
 		ctxCancel, cancel := context.WithCancel(ctx)
 		c.cancels = append(c.cancels, cancel)
 
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			c.xread(ctxCancel, i, handlers)
+			c.xread(ctxCancel, handlers)
 		}()
 
 		if !c.options.NoAck {
@@ -226,12 +234,12 @@ func (c *consumer) Spin() {
 		}
 
 		<-quit
-		clog.Printf("\033[33mShutdown...\033[0m")
+		clog.Printf("Shutdown...")
+
 		c.Shutdown()
 	}()
 
 	<-c.stop
-	clog.Printf("\033[32mGraceful shutdown success!\033[0m")
 }
 
 func (c *consumer) Shutdown() {
@@ -241,12 +249,63 @@ func (c *consumer) Shutdown() {
 	for _, cancel := range c.cancels {
 		cancel()
 	}
-	c.wg.Wait()
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.options.ExitWaitTime)
+	defer cancel()
+
+	ch := make(chan int, 1)
+
+	go func() {
+		c.wg.Wait()
+		ch <- 1
+	}()
+
+	select {
+	case <-ch:
+		clog.Printf("Graceful shutdown success")
+		return
+	case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded {
+			clog.Println("Timeout exceeded")
+		}
+	}
+
 }
 
-func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
-	hmap := make(map[string]Function)
-	streams := []string{}
+// 统一的处理函数
+func (c *consumer) handleMessage(hctx *Context, fc Function) {
+	defer func() {
+		isAck := true
+		if r := recover(); r != nil {
+			isAck = false
+			// 打印堆栈
+			buf := make([]byte, 1024)
+			n := runtime.Stack(buf, false)
+			clog.Printf("\033[31mPanic: %v\nStack trace:\n%s\033[0m", r, string(buf[:n]))
+		}
+
+		if c.options.MaxRetries <= 0 {
+			isAck = true
+		}
+
+		if isAck && !c.options.NoAck {
+			xerr := c.rcli.XAck(hctx, hctx.Stream, c.options.Group, hctx.ID).Err()
+			if xerr != nil {
+				clog.Printf("\033[31merror acknowledging after failed XAck for %v stream and %v message, info:%v\033[0m",
+					hctx.Stream, hctx.ID, xerr)
+			}
+		}
+	}()
+
+	err := fc(hctx)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (c *consumer) xread(ctx context.Context, handlers []*handlerFc) {
+	hmap := make(map[string]Function, len(handlers))
+	streams := make([]string, 0, 2*len(handlers))
 
 	for _, h := range handlers {
 		hmap[h.Stream] = h.Fc
@@ -257,12 +316,9 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 		streams = append(streams, ">")
 	}
 
-	var wg sync.WaitGroup
-
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Wait()
 			return
 		default:
 			entries, err := c.rcli.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -275,21 +331,15 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 			}).Result()
 
 			if err != nil {
-				if errors.Is(err, redis.Nil) {
-					continue
-				} else if errors.Is(err, context.Canceled) {
-					continue
-				} else {
-					clog.Printf("\033[31m%v\033[0m", err)
-
-					time.Sleep(time.Second * 3)
+				if errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) {
 					continue
 				}
-			}
-
-			if len(entries) == 0 {
+				clog.Printf("\033[31mXReadGroup error: %v\033[0m", err)
+				time.Sleep(time.Second * 3)
 				continue
 			}
+
 			for _, entry := range entries {
 				fc, exists := hmap[entry.Stream]
 				if !exists {
@@ -299,7 +349,7 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 
 				for _, msg := range entry.Messages {
 					hctx := &Context{
-						Context: ctx,
+						Context: context.Background(),
 						Msg: &Msg{
 							ID:      msg.ID,
 							Stream:  entry.Stream,
@@ -307,35 +357,16 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 						},
 					}
 
-					wg.Add(1)
-					_ = c.pool.Submit(func() {
-						isAck := true
-						defer wg.Done()
-						defer func() {
-							if r := recover(); r != nil {
-								isAck = false
-								buf := make([]byte, 1024)
-								n := runtime.Stack(buf, false)
-								clog.Printf("%s%v\nStack trace:\n%s%s\n", "\033[31m", r, buf[:n], "\033[0m")
-							}
-
-							if c.options.MaxRetries <= 0 {
-								isAck = true
-							}
-
-							if isAck && !c.options.NoAck {
-								xerr := c.rcli.XAck(ctx, entry.Stream, c.options.Group, msg.ID).Err()
-								if xerr != nil {
-									clog.Printf("\033[31merror acknowledging after failed XAck for %v stream and %v message\033[0m",
-										entry.Stream, msg.ID)
-								}
-							}
-						}()
-
-						if _er := fc(hctx); _er != nil {
-							panic(_er)
-						}
+					// 投递到 ants 池
+					c.wg.Add(1)
+					errSubmit := c.pool.Submit(func() {
+						defer c.wg.Done()
+						c.handleMessage(hctx, fc)
 					})
+					if errSubmit != nil {
+						// ants pool 可能已经关闭或队列满
+						clog.Printf("\033[31mSubmit to pool error: %v\033[0m", errSubmit)
+					}
 				}
 			}
 		}
@@ -343,24 +374,23 @@ func (c *consumer) xread(ctx context.Context, i int, handlers []*handlerFc) {
 }
 
 func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
-	hmap := make(map[string]Function)
+	hmap := make(map[string]Function, len(handlers))
 	for _, h := range handlers {
 		hmap[h.Stream] = h.Fc
 	}
 
-	var wg sync.WaitGroup
 	ticker := time.NewTicker(c.options.XpendingInterval)
 
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Wait()
 			return
+
 		case <-ticker.C:
-			stream_list := []string{}
+			streams := []string{}
 
 			cmds, err := c.rcli.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-				for _, h := range c.handlers {
+				for _, h := range handlers {
 					pipe.XPendingExt(ctx, &redis.XPendingExtArgs{
 						Stream: h.Stream,
 						Group:  c.options.Group,
@@ -369,19 +399,19 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 						End:    "+",
 						Count:  c.options.ReadCount,
 					})
-					stream_list = append(stream_list, h.Stream)
+					streams = append(streams, h.Stream)
 				}
 				return nil
 			})
+
 			if err != nil {
-				if errors.Is(err, redis.Nil) {
-					continue
-				} else if errors.Is(err, context.Canceled) {
-					continue
-				} else {
-					time.Sleep(time.Second * 3)
+				if errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) ||
+					errors.Is(err, context.DeadlineExceeded) {
 					continue
 				}
+				clog.Printf("\033[31mXPending error: %v\033[0m", err)
+				time.Sleep(time.Second * 3)
+				continue
 			}
 
 			xdel_ids := []string{}
@@ -389,7 +419,7 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 
 			for i, cmd := range cmds {
 				pcmds, _ := cmd.(*redis.XPendingExtCmd).Result()
-				streamName := stream_list[i]
+				streamName := streams[i]
 
 				for _, pcmd := range pcmds {
 					if pcmd.RetryCount > c.options.MaxRetries {
@@ -402,15 +432,16 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 				if len(xdel_ids) > 0 {
 					err = c.rcli.XAck(ctx, streamName, c.options.Group, xdel_ids...).Err()
 					if err != nil {
-						clog.Printf("\033[31merror acknowledging after failed XAck for %v stream and %v message\033[0m",
-							streamName, xdel_ids)
+						clog.Printf("\033[31merror acknowledging after failed XAck for %v stream and %v message, info:%v\033[0m",
+							streamName, xdel_ids, err)
 					}
 				}
 
 				if len(xclaim_ids) > 0 {
 					fc, exists := hmap[streamName]
 					if !exists {
-						clog.Printf("\033[35mStream %s not found handler\033[0m", streamName)
+						clog.Println(streamName)
+						clog.Printf("\033[35mStream %s 1not found handler\033[0m", streamName)
 						continue
 					}
 
@@ -428,7 +459,7 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 					}
 					for _, msg := range xmsgs {
 						hctx := &Context{
-							Context: ctx,
+							Context: context.Background(),
 							Msg: &Msg{
 								ID:      msg.ID,
 								Stream:  streamName,
@@ -436,31 +467,16 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 							},
 						}
 
-						wg.Add(1)
-						_ = c.pool.Submit(func() {
-							isAck := true
-							defer wg.Done()
-							defer func() {
-								if r := recover(); r != nil {
-									isAck = false
-									buf := make([]byte, 1024)
-									n := runtime.Stack(buf, false)
-									clog.Printf("%s%v\nStack trace:\n%s%s\n", "\033[31m", r, buf[:n], "\033[0m")
-								}
-
-								if isAck {
-									xerr := c.rcli.XAck(ctx, streamName, c.options.Group, msg.ID).Err()
-									if xerr != nil {
-										clog.Printf("\033[31merror acknowledging after failed XAck for %v stream and %v message\033[0m",
-											streamName, msg.ID)
-									}
-								}
-							}()
-
-							if _er := fc(hctx); _er != nil {
-								panic(_er)
-							}
+						// 投递到 ants 池
+						c.wg.Add(1)
+						errSubmit := c.pool.Submit(func() {
+							defer c.wg.Done()
+							c.handleMessage(hctx, fc)
 						})
+						if errSubmit != nil {
+							// ants pool 可能已经关闭或队列满
+							clog.Printf("\033[31mSubmit to pool error: %v\033[0m", errSubmit)
+						}
 					}
 				}
 			}
