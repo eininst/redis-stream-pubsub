@@ -379,6 +379,7 @@ func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
 	}
 
 	ticker := time.NewTicker(c.options.XpendingInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
