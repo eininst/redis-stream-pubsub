@@ -152,6 +152,8 @@ Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello fiel
 
 ***
 
+> See [example](/example)
+
 ## 开发与贡献
 欢迎参与本项目开发和提交 Issue/PR：
 
