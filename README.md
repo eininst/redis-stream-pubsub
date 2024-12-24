@@ -134,7 +134,7 @@ func main() {
 
 ```text
 2024/12/23 23:47:09 [Spin] NoAck=false Workers=32 ReadCount=10 BlockTime=5s BatchSize=16
-2024/12/23 23:47:09 [Spin] XpendingInterval=3s Timeout=5m0s MaxRetries=64
+2024/12/23 23:47:09 [Spin] XautoClaimInterval=5s Timeout=5m0s
 2024/12/23 23:47:09 [Spin] Start 1 goroutines to perform XRead from Redis...
 2024/12/23 23:47:09 [Spin] Start 1 goroutines to perform XPending from Redis...
 Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello field2:123]

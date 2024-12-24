@@ -184,7 +184,7 @@ func (c *consumer) Spin() {
 	clog.Printf("NoAck=%v Workers=%v ReadCount=%v BlockTime=%v BatchSize=%v",
 		c.options.NoAck, c.options.Workers, c.options.ReadCount, c.options.BlockTime, c.options.BatchSize)
 	if !c.options.NoAck {
-		clog.Printf("XpendingInterval=%v Timeout=%v",
+		clog.Printf("XautoClaimInterval=%v Timeout=%v",
 			c.options.XautoClaimInterval, c.options.Timeout)
 	}
 
