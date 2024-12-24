@@ -146,7 +146,7 @@ Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello fiel
 |-------------------------------------------------------------|-----------------------|------------------------------|
 | `WithName(name string)`                                     | 设置消费者名称。              | `"CONSUMER"`                 |
 | `WithGroup(group string)`                                   | 设置消费者组名称。             | `"CONSUMER-GROUP"`           |
-| `WithWorkers(workers int)`                                  | 设置工作协程的数量。默认`0`,`不限制`     | `0`（根据 CPU 动态调整）     |
+| `WithWorkers(workers int)`                                  | 设置工作协程的数量。     |`0`,`不限制`     |
 | `WithReadCount(readCount int64)`                            | 设置每次读取的消息数量。          | `10`                         |
 | `WithBatchSize(batchSize int)`                              | 设置每批处理的处理器数量。         | `16`                         |
 | `WithBlockTime(blockTime time.Duration)`                    | 设置读取消息时的阻塞时间。         | `5s`                         |
