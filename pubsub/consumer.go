@@ -3,8 +3,8 @@ package pubsub
 import (
 	"context"
 	"errors"
-	"github.com/go-redis/redis/v8"
 	"github.com/panjf2000/ants/v2"
+	"github.com/redis/go-redis/v9"
 	"log"
 	"os"
 	"os/signal"
@@ -26,18 +26,17 @@ type Option struct {
 }
 
 type Options struct {
-	Name             string
-	Group            string
-	Workers          int
-	ReadCount        int64
-	BlockTime        time.Duration
-	MaxRetries       int64
-	Timeout          time.Duration
-	XpendingInterval time.Duration
-	BatchSize        int
-	NoAck            bool
-	Signals          []os.Signal
-	ExitWaitTime     time.Duration
+	Name               string
+	Group              string
+	Workers            int
+	ReadCount          int64
+	BlockTime          time.Duration
+	Timeout            time.Duration
+	XautoClaimInterval time.Duration
+	BatchSize          int
+	NoAck              bool
+	Signals            []os.Signal
+	ExitWaitTime       time.Duration
 }
 
 func (o *Options) Apply(opts []Option) {
@@ -82,21 +81,15 @@ func WithBlockTime(blockTime time.Duration) Option {
 	}}
 }
 
-func WithMaxRetries(maxRetries int64) Option {
-	return Option{F: func(o *Options) {
-		o.MaxRetries = maxRetries
-	}}
-}
-
 func WithTimeout(timeout time.Duration) Option {
 	return Option{F: func(o *Options) {
 		o.Timeout = timeout
 	}}
 }
 
-func WithXpendingInterval(xpendingInterval time.Duration) Option {
+func WithXautoClaimInterval(xautoClaimInterval time.Duration) Option {
 	return Option{F: func(o *Options) {
-		o.XpendingInterval = xpendingInterval
+		o.XautoClaimInterval = xautoClaimInterval
 	}}
 }
 
@@ -149,17 +142,16 @@ func NewConsumer(uri string, opts ...Option) Consumer {
 // NewConsumerWithClient 使用外部注入的 redis.Client
 func NewConsumerWithClient(rcli *redis.Client, opts ...Option) Consumer {
 	options := &Options{
-		Name:             "CONSUMER",
-		Group:            "CONSUMER-GROUP",
-		Workers:          0,
-		ReadCount:        10,
-		BlockTime:        time.Second * 5,
-		MaxRetries:       64,
-		Timeout:          time.Second * 300,
-		BatchSize:        16,
-		XpendingInterval: time.Second * 3,
-		NoAck:            false,
-		ExitWaitTime:     time.Second * 10,
+		Name:               "CONSUMER",
+		Group:              "CONSUMER-GROUP",
+		Workers:            0,
+		ReadCount:          10,
+		BlockTime:          time.Second * 5,
+		Timeout:            time.Second * 300,
+		BatchSize:          16,
+		XautoClaimInterval: time.Second * 5,
+		NoAck:              false,
+		ExitWaitTime:       time.Second * 10,
 	}
 	options.Apply(opts)
 
@@ -188,8 +180,8 @@ func (c *consumer) Spin() {
 	clog.Printf("NoAck=%v Workers=%v ReadCount=%v BlockTime=%v BatchSize=%v",
 		c.options.NoAck, c.options.Workers, c.options.ReadCount, c.options.BlockTime, c.options.BatchSize)
 	if !c.options.NoAck {
-		clog.Printf("XpendingInterval=%v Timeout=%v MaxRetries=%v",
-			c.options.XpendingInterval, c.options.Timeout, c.options.MaxRetries)
+		clog.Printf("XpendingInterval=%v Timeout=%v",
+			c.options.XautoClaimInterval, c.options.Timeout)
 	}
 
 	// 确保 Stream 和 Group 都已创建
@@ -220,7 +212,7 @@ func (c *consumer) Spin() {
 			c.wg.Add(1)
 			go func(handlers []*handlerFc) {
 				defer c.wg.Done()
-				c.xpending(ctxCancel, handlers)
+				c.xautoClaim(ctxCancel, handlers)
 			}(handlersChunk)
 		}
 	}
@@ -287,11 +279,6 @@ func (c *consumer) handleMessage(hctx *Context, fc Function) {
 			clog.Printf("\033[31mPanic: %v\nStack trace:\n%s\033[0m", r, string(buf[:n]))
 		}
 
-		// 如果 MaxRetries<=0 表示不再进行重试处理，可视为一定 ack
-		if c.options.MaxRetries <= 0 {
-			isAck = true
-		}
-
 		// 如果不是 NoAck，则进行 ack
 		if isAck && !c.options.NoAck {
 			if err := c.rcli.XAck(hctx, hctx.Stream, c.options.Group, hctx.ID).Err(); err != nil {
@@ -335,12 +322,12 @@ func (c *consumer) xread(ctx context.Context, handlers []*handlerFc) {
 				NoAck:    c.options.NoAck,
 			}).Result()
 
-			if shouldContinueOnErr(err) {
-				continue
-			} else if err != nil {
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					continue
+				}
 				clog.Printf("\033[31mXReadGroup error: %v\033[0m", err)
-				time.Sleep(time.Second * 3)
-				continue
+				break
 			}
 
 			// 处理读取到的消息
@@ -351,22 +338,24 @@ func (c *consumer) xread(ctx context.Context, handlers []*handlerFc) {
 					continue
 				}
 				for _, msg := range streamResult.Messages {
-					hctx := &Context{
-						Context: context.Background(),
-						Msg: &Msg{
-							ID:      msg.ID,
-							Stream:  streamResult.Stream,
-							Payload: msg.Values,
-						},
-					}
-					c.wg.Add(1)
-					if errSubmit := c.pool.Submit(func() {
-						defer c.wg.Done()
-						c.handleMessage(hctx, fc)
-					}); errSubmit != nil {
-						// ants pool 已关闭或队列已满
-						clog.Printf("\033[31mSubmit to pool error: %v\033[0m", errSubmit)
-						c.wg.Done()
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						// 创建消息上下文
+						hctx := &Context{
+							Context: context.Background(),
+							Msg: &Msg{
+								ID:      msg.ID,
+								Stream:  streamResult.Stream,
+								Payload: msg.Values,
+							},
+						}
+						c.wg.Add(1)
+						_ = c.pool.Submit(func() {
+							defer c.wg.Done()
+							c.handleMessage(hctx, fc)
+						})
 					}
 				}
 			}
@@ -374,122 +363,127 @@ func (c *consumer) xread(ctx context.Context, handlers []*handlerFc) {
 	}
 }
 
-// xpending 处理挂起的消息 (Retry)
-func (c *consumer) xpending(ctx context.Context, handlers []*handlerFc) {
-	hmap := make(map[string]Function, len(handlers))
-	for _, h := range handlers {
-		hmap[h.Stream] = h.Fc
-	}
-
-	ticker := time.NewTicker(c.options.XpendingInterval)
+func (c *consumer) xautoClaim(ctx context.Context, handlers []*handlerFc) {
+	ticker := time.NewTicker(c.options.XautoClaimInterval)
 	defer ticker.Stop()
+
+	// 预构建 stream 到处理函数的映射
+	handlerMap := make(map[string]Function)
+	for _, handler := range handlers {
+		handlerMap[handler.Stream] = handler.Fc
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			streamNames := make([]string, 0, len(handlers))
-
-			// 使用 Pipeline 同时获取多个 Stream 的挂起信息
-			cmds, err := c.rcli.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-				for _, h := range handlers {
-					pipe.XPendingExt(ctx, &redis.XPendingExtArgs{
-						Stream: h.Stream,
-						Group:  c.options.Group,
-						Idle:   c.options.Timeout,
-						Start:  "0",
-						End:    "+",
-						Count:  c.options.ReadCount,
-					})
-					streamNames = append(streamNames, h.Stream)
-				}
-				return nil
-			})
-
-			if shouldContinueOnErr(err) {
-				continue
-			} else if err != nil {
-				clog.Printf("\033[31mXPending error: %v\033[0m", err)
-				time.Sleep(time.Second * 3)
-				continue
+			// 循环认领消息
+			// 当一轮处理后都没有消息可认领，说明暂时没有更多 pending，退出循环
+			offsetMap := make(map[string]string)
+			for _, h := range handlers {
+				offsetMap[h.Stream] = "0-0"
 			}
 
-			// 逐个处理 XPending 结果
-			for i, cmd := range cmds {
-				pendingEntries, _ := cmd.(*redis.XPendingExtCmd).Result()
-				streamName := streamNames[i]
+			for {
+				claimCmds, err := c.executeXAutoClaim(ctx, offsetMap)
 
-				// 将需要删除的 ID 和需要重新 claim 的 ID 分开
-				var toDelete, toClaim []string
-				for _, pending := range pendingEntries {
-					if pending.RetryCount > c.options.MaxRetries {
-						toDelete = append(toDelete, pending.ID)
-					} else {
-						toClaim = append(toClaim, pending.ID)
-					}
-				}
-
-				// XAck 删除超出重试次数的消息
-				if len(toDelete) > 0 {
-					if errAck := c.rcli.XAck(ctx, streamName, c.options.Group, toDelete...).Err(); errAck != nil {
-						clog.Printf(
-							"\033[31mXAck error after exceeding max retries (stream=%s, ids=%v): %v\033[0m",
-							streamName, toDelete, errAck,
-						)
-					}
-				}
-
-				// XClaim 重新获取需要重试的消息
-				if len(toClaim) > 0 {
-					fc, ok := hmap[streamName]
-					if !ok {
-						clog.Printf("\033[35mNo handler for stream %s\033[0m", streamName)
+				if err != nil {
+					if errors.Is(err, redis.Nil) {
 						continue
 					}
-					xmsgs, er := c.rcli.XClaim(ctx, &redis.XClaimArgs{
-						Stream:   streamName,
-						Group:    c.options.Group,
-						Consumer: c.options.Name,
-						MinIdle:  c.options.Timeout,
-						Messages: toClaim,
-					}).Result()
-					if er != nil {
-						clog.Printf("\033[31mXClaim error (stream=%s): %v\033[0m", streamName, er)
-						continue
-					}
+					clog.Printf("Pipeline Exec error: %v\n", err)
+					break
+				}
 
-					// 重新处理拿回来的消息
-					for _, msg := range xmsgs {
-						hctx := &Context{
-							Context: context.Background(),
-							Msg: &Msg{
-								ID:      msg.ID,
-								Stream:  streamName,
-								Payload: msg.Values,
-							},
-						}
-						c.wg.Add(1)
-						if errSubmit := c.pool.Submit(func() {
-							defer c.wg.Done()
-							c.handleMessage(hctx, fc)
-						}); errSubmit != nil {
-							clog.Printf("\033[31mSubmit to pool error: %v\033[0m", errSubmit)
-							c.wg.Done()
-						}
-					}
+				gotMessages := c.processXAutoClaimResults(ctx, claimCmds, handlerMap, offsetMap)
+
+				// 如果没有获取到任何消息，退出内循环
+				if !gotMessages || len(offsetMap) == 0 {
+					break
 				}
 			}
 		}
 	}
 }
 
-// shouldContinueOnErr 用于判断遇到 redis.Nil / context.Cancelled / context.DeadlineExceeded 等是否继续循环
-func shouldContinueOnErr(err error) bool {
-	if err == nil {
-		return false
+// executeXAutoClaim 执行 XAutoClaim 的 Pipeline
+func (c *consumer) executeXAutoClaim(ctx context.Context, offsetMap map[string]string) (map[string]*redis.XAutoClaimCmd, error) {
+	pipe := c.rcli.Pipeline()
+	claimCmds := make(map[string]*redis.XAutoClaimCmd)
+
+	for streamName, start := range offsetMap {
+		claimCmds[streamName] = pipe.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   streamName,
+			Group:    c.options.Group,
+			Consumer: c.options.Name,
+			MinIdle:  c.options.Timeout,
+			Start:    start,
+			Count:    c.options.ReadCount,
+		})
 	}
-	return errors.Is(err, redis.Nil) ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded)
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	return claimCmds, nil
+}
+
+// processXAutoClaimResults 处理 XAutoClaim 的返回结果
+func (c *consumer) processXAutoClaimResults(
+	ctx context.Context,
+	claimCmds map[string]*redis.XAutoClaimCmd,
+	handlerMap map[string]Function,
+	offsetMap map[string]string,
+) bool {
+	gotAnyMessage := false
+
+	for stream, cmd := range claimCmds {
+		msgs, nextStart, err := cmd.Result()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				continue
+			}
+			clog.Printf("XAutoClaim error, stream=%s, err=%v\n", stream, err)
+			break
+		}
+
+		if len(msgs) == 0 {
+			continue
+		}
+
+		// 更新 offsetMap
+		if len(msgs) < int(c.options.ReadCount) || nextStart == "" {
+			delete(offsetMap, stream)
+		} else {
+			offsetMap[stream] = nextStart
+		}
+
+		gotAnyMessage = true
+		handlerFunc := handlerMap[stream]
+
+		// 异步处理消息
+		for _, msg := range msgs {
+			if ctx.Err() != nil {
+				return gotAnyMessage
+			}
+
+			msgContext := &Context{
+				Context: context.Background(),
+				Msg: &Msg{
+					ID:      msg.ID,
+					Stream:  stream,
+					Payload: msg.Values,
+				},
+			}
+
+			c.wg.Add(1)
+			_ = c.pool.Submit(func() {
+				defer c.wg.Done()
+				c.handleMessage(msgContext, handlerFunc)
+			})
+		}
+	}
+
+	return gotAnyMessage
 }
