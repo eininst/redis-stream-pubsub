@@ -3,8 +3,9 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/eininst/redis-stream-pubsub.svg)](https://pkg.go.dev/github.com/eininst/redis-stream-pubsub)
 [![License](https://img.shields.io/github/license/eininst/redis-stream-pubsub.svg)](LICENSE)
 
-基于 **Redis Streams** 实现的发布订阅（Pub/Sub）框架，提供简单、轻量级的 **生产者** 与 **消费者** 接口，封装了 `XAdd`、`XReadGroup`、`XPending`、`XAck` 等操作，简化了在 Go 语言中使用 Redis 流式消息的过程。  
-使用本项目，你可以快速搭建一个分布式的消息队列或事件系统。
+一个**健壮且高效**的 Redis Streams 发布订阅（PubSub）系统，使用 Go 语言编写。该项目利用 [go-redis](https://github.com/redis/go-redis) 客户端和 [ants](https://github.com/panjf2000/ants) 协程池，实现高性能的消息消费与处理。支持**自动认领**、**并发处理**、**优雅关闭**等功能，适用于需要**高可靠性**和**高并发**消息处理的场景。
+
+This project **requires Redis version 7 or higher**.
 
 ## 功能特性
 
@@ -13,31 +14,29 @@
     - 可设置 `MaxLen`、`Approx`，控制 Stream 的最大长度
     - 支持自定义 `redis.Client`
 
+
 2. **消费者 (Consumer)**
-    - 基于 Redis `XGroup` 实现消费组，防止消息丢失
-    - 支持多协程并发消费，通过内置的协程池（`ants`）管理并发
-    - 配置灵活：可设置 `ReadCount`、`BlockTime`、`BatchSize`、`MaxRetries`、`Timeout` 等
-    - 自动处理 Pending 消息（`XPending` + `XClaim`），可重试或放弃超时未确认的消息
 
-3. **优雅关闭 (Graceful Shutdown)**
-    - 内部捕捉系统信号（可自定义），在进程退出时，安全停止消费并等待任务执行完毕
-    - 配合 `context.Context`，支持超时或取消
-
-4. **高可用**
-    - 结合 Redis Streams 自带的消费组机制，多实例部署时可自动进行负载均衡与容错
-    - 分布式环境下保障消息可靠性
-
-5. **易扩展**
-    - 生产者、消费者均提供可选的参数结构体 (`ProducerOptions` / `Options`)
-    - 可以自定义初始化逻辑、复用已有的 `redis.Client`
+   - **并发处理**：利用`ants`协程池实现高效的消息处理。
+   - **自动认领**：自动认领待处理消息，确保消息不丢失。
+   - **可配置选项**：通过多种配置选项高度自定义。
+   - **优雅关闭**：确保所有正在处理的消息在关闭前完成。
+   - **信号处理**：监听操作系统信号以启动优雅关闭。
+   - **支持多流**：同时处理多个 Redis Streams。
+   - **错误处理与恢复**：在处理过程中捕获并记录错误，确保系统稳定运行。
+   - **高可用**
+     - 结合 Redis Streams 自带的消费组机制，多实例部署时可自动进行负载均衡与容错
+     - 分布式环境下保障消息可靠性
 
 ---
+
 
 ## 安装
 
 ```bash
 go get github.com/eininst/redis-stream-pubsub
 ```
+
 
 
 ## 快速开始
@@ -142,13 +141,20 @@ Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello fiel
 ```
 
 #### 消费者常用选项
-* `WithWorkers`: 并发协程数量（由 `ants` 池控制）, 默认`0`
-* `WithReadCount`: 每次 XReadGroup 拉取的消息数, 默认`10`
-* `WithBlockTime`: 拉取消息的阻塞时间, 默认`5s`
-* `WithBatchSize`: 将多个 Handler 分批启动 Goroutine (分组批量读取`Stream`), 默认`16`个为一组
-* `WithXpendingInterval`: 定期检查 Pending 消息的时间间隔, 默认`3s`
-* `WithTimeout`: 用于 Pending 消息的 MinIdleTime，超时可能会触发 XClaim, 默认`300s`
-* `WithMaxRetries`: 若消息被重试次数超过此值，自动 XAck 并丢弃, 默认`64`
+
+| 选项                                                        | 描述                    | 默认值                       |
+|-------------------------------------------------------------|-----------------------|------------------------------|
+| `WithName(name string)`                                     | 设置消费者名称。              | `"CONSUMER"`                 |
+| `WithGroup(group string)`                                   | 设置消费者组名称。             | `"CONSUMER-GROUP"`           |
+| `WithWorkers(workers int)`                                  | 设置工作协程的数量。默认`0`,`不限制`     | `0`（根据 CPU 动态调整）     |
+| `WithReadCount(readCount int64)`                            | 设置每次读取的消息数量。          | `10`                         |
+| `WithBatchSize(batchSize int)`                              | 设置每批处理的处理器数量。         | `16`                         |
+| `WithBlockTime(blockTime time.Duration)`                    | 设置读取消息时的阻塞时间。         | `5s`                         |
+| `WithTimeout(timeout time.Duration)`                        | 设置自动认领消息的空闲超时时间。      | `300s`                       |
+| `WithXautoClaimInterval(xautoClaimInterval time.Duration)`  | 设置自动认领的间隔时间。          | `5s`                         |
+| `WithNoAck(noAck bool)`                                     | 如果设置为 `true`，则禁用消息确认。 | `false`                      |
+| `WithSignals(signals ...os.Signal)`                         | 设置自定义的操作系统信号以监听关闭。    | `SIGTERM`                    |
+| `WithExitWaitTime(exitWaitTime time.Duration)`              | 设置优雅关闭的最大等待时间。        | `10s`                        |
 
 
 > See [example](/example)
