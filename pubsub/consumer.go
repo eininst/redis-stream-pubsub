@@ -136,7 +136,11 @@ type consumer struct {
 
 // NewConsumer 使用 URI 创建 redis.Client
 func NewConsumer(uri string, opts ...Option) Consumer {
-	return NewConsumerWithClient(NewRedisClient(uri), opts...)
+	rcli, er := NewRedisClient(uri)
+	if er != nil {
+		clog.Fatal(er)
+	}
+	return NewConsumerWithClient(rcli, opts...)
 }
 
 // NewConsumerWithClient 使用外部注入的 redis.Client
@@ -326,7 +330,12 @@ func (c *consumer) xread(ctx context.Context, handlers []*handlerFc) {
 				if errors.Is(err, redis.Nil) {
 					continue
 				}
+				if errors.Is(err, context.Canceled) {
+					continue
+				}
+
 				clog.Printf("\033[31mXReadGroup error: %v\033[0m", err)
+				_ = SleepContext(ctx, time.Second*3)
 				break
 			}
 
@@ -392,7 +401,7 @@ func (c *consumer) xautoClaim(ctx context.Context, handlers []*handlerFc) {
 					if errors.Is(err, redis.Nil) {
 						continue
 					}
-					clog.Printf("Pipeline Exec error: %v\n", err)
+					clog.Printf("\033[31mPipeline XAutoClaim Exec error: %v\033[0m\n", err)
 					break
 				}
 

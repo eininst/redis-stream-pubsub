@@ -28,7 +28,12 @@ type producer struct {
 }
 
 func NewProducer(uri string, options ...*ProducerOptions) Producer {
-	return NewProducerWithClient(NewRedisClient(uri), options...)
+	rcli, er := NewRedisClient(uri)
+	if er != nil {
+		clog.Fatal(er)
+	}
+
+	return NewProducerWithClient(rcli, options...)
 }
 
 func NewProducerWithClient(rcli *redis.Client, opts ...*ProducerOptions) Producer {

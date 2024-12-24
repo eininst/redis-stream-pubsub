@@ -1,15 +1,15 @@
 package pubsub
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"github.com/redis/go-redis/v9"
-	"log"
 	"net/url"
 	"strconv"
+	"time"
 )
 
-var REDIS_POOL_SIZE = 1024
+const DefaultRedisPoolSize = 1024
 
 type Msg struct {
 	ID      string
@@ -24,75 +24,103 @@ type RedisOptions struct {
 	Port     int
 	Password string
 	DB       int
+	PoolSize int
 }
 
-func ParsedRedisURL(uri string) (*RedisOptions, error) {
+// ParseRedisURL parses the Redis URI and returns RedisOptions.
+// It ensures robust error handling and uses default values where necessary.
+func ParseRedisURL(uri string) (*RedisOptions, error) {
 	parsedURL, err := url.Parse(uri)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Failed to parse Redis URL: %v", err))
+		return nil, fmt.Errorf("failed to parse Redis URL: %w", err)
 	}
+
 	scheme := parsedURL.Scheme
 	host := parsedURL.Hostname()
-	port := parsedURL.Port()
-	password, _ := parsedURL.User.Password()   // 获取密码
-	db, er := strconv.Atoi(parsedURL.Path[1:]) // 去掉前导斜杠并转换为整数
-	if er != nil {
-		return nil, errors.New(fmt.Sprintf("Failed to parse DB index: %v", err))
-	}
+	portStr := parsedURL.Port()
+	password, _ := parsedURL.User.Password()
 
-	_port := 6379
-	if port != "" {
-		portInt, _er := strconv.Atoi(port)
-
-		if _er != nil {
-			return nil, errors.New(fmt.Sprintf("Failed to parse Port index: %v", _er))
+	// Default Redis port
+	port := 6379
+	if portStr != "" {
+		port, err = strconv.Atoi(portStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid port in Redis URL: %w", err)
 		}
-		_port = portInt
 	}
 
-	addr := fmt.Sprintf("%v:%v", host, port)
+	// Parse DB index from the path, defaulting to 0
+	db := 0
+	if len(parsedURL.Path) > 1 {
+		dbStr := parsedURL.Path[1:]
+		db, err = strconv.Atoi(dbStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid DB index in Redis URL: %w", err)
+		}
+	}
+
+	addr := fmt.Sprintf("%s:%d", host, port)
 
 	return &RedisOptions{
 		Scheme:   scheme,
 		Addr:     addr,
 		Host:     host,
-		Port:     _port,
+		Port:     port,
 		Password: password,
 		DB:       db,
+		PoolSize: DefaultRedisPoolSize,
 	}, nil
 }
 
-func NewRedisClient(uri string) *redis.Client {
-	opt, er := ParsedRedisURL(uri)
-	if er != nil {
-		log.Fatalf("%v%v%v", "\033[31m", er.Error(), "\033[0m")
+// NewRedisClient creates a new Redis client based on the provided URI.
+// It returns an error if the URI is invalid or if the connection fails.
+func NewRedisClient(uri string) (*redis.Client, error) {
+	opt, err := ParseRedisURL(uri)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing Redis URL: %w", err)
 	}
-
-	poolSize := REDIS_POOL_SIZE
 
 	rcli := redis.NewClient(&redis.Options{
 		Addr:     opt.Addr,
 		Password: opt.Password,
 		DB:       opt.DB,
-		PoolSize: poolSize,
-		//IdleTimeout:        -1,
-		//IdleCheckFrequency: -1,
+		PoolSize: opt.PoolSize,
 	})
 
-	return rcli
+	// Verify the connection by pinging the Redis server
+	if err := rcli.Ping(context.Background()).Err(); err != nil {
+		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+	}
+
+	return rcli, nil
 }
 
+// ChunkArray splits a slice into smaller chunks of the specified size.
+// It preallocates the result slice for improved performance.
 func ChunkArray[T any](arr []T, size int) [][]T {
-	var result [][]T
+	if size <= 0 {
+		size = 1 // Prevent division by zero or negative sizes
+	}
+
+	chunkCount := (len(arr) + size - 1) / size
+	result := make([][]T, 0, chunkCount)
+
 	for i := 0; i < len(arr); i += size {
-		// 计算当前子数组的结束索引
 		end := i + size
-		// 确保结束索引不超过数组长度
 		if end > len(arr) {
 			end = len(arr)
 		}
-		// 将当前子数组添加到结果中
 		result = append(result, arr[i:end])
 	}
+
 	return result
+}
+
+func SleepContext(ctx context.Context, d time.Duration) error {
+	select {
+	case <-time.After(d):
+		return nil // 睡眠完成
+	case <-ctx.Done():
+		return ctx.Err() // 上下文被取消
+	}
 }
