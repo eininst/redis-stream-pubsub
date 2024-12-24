@@ -114,7 +114,6 @@ func handleMsg(ctx *pubsub.Context) error {
 }
 
 func main() {
-    // 1. 创建 Consumer
    // 1. 创建一个 Consumer
    consumer := pubsub.NewConsumer("redis://localhost:6379/0",
       pubsub.WithWorkers(32), // ants 协程池数量, 默认0(不限制)
