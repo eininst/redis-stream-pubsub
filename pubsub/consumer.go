@@ -196,7 +196,7 @@ func (c *consumer) Spin() {
 	chunkHandlers := ChunkArray(c.handlers, c.options.BatchSize)
 	clog.Printf("Start %v goroutines to perform XRead from Redis...", len(chunkHandlers))
 	if !c.options.NoAck {
-		clog.Printf("Start %v goroutines to perform XPending from Redis...", len(chunkHandlers))
+		clog.Printf("Start %v goroutines to perform XAutoClaim from Redis...", len(chunkHandlers))
 	}
 
 	// 按批次启动 goroutine
