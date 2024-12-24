@@ -142,19 +142,19 @@ Consume from stream=test_stream ID=1734968851711-0 payload=map[field1:hello fiel
 
 #### 消费者常用选项
 
-| 选项                                                        | 描述                    | 默认值                       |
-|-------------------------------------------------------------|-----------------------|------------------------------|
-| `WithName(name string)`                                     | 设置消费者名称。              | `"CONSUMER"`                 |
-| `WithGroup(group string)`                                   | 设置消费者组名称。             | `"CONSUMER-GROUP"`           |
-| `WithWorkers(workers int)`                                  | 设置工作协程的数量。     |`0`,`不限制`     |
-| `WithReadCount(readCount int64)`                            | 设置每次读取的消息数量。          | `10`                         |
-| `WithBatchSize(batchSize int)`                              | 设置每批处理的处理器数量。         | `16`                         |
-| `WithBlockTime(blockTime time.Duration)`                    | 设置读取消息时的阻塞时间。         | `5s`                         |
-| `WithTimeout(timeout time.Duration)`                        | 设置自动认领消息的空闲超时时间。      | `300s`                       |
-| `WithXautoClaimInterval(xautoClaimInterval time.Duration)`  | 设置自动认领的间隔时间。          | `5s`                         |
-| `WithNoAck(noAck bool)`                                     | 如果设置为 `true`，则禁用消息确认。 | `false`                      |
-| `WithSignals(signals ...os.Signal)`                         | 设置自定义的操作系统信号以监听关闭。    | `SIGTERM`                    |
-| `WithExitWaitTime(exitWaitTime time.Duration)`              | 设置优雅关闭的最大等待时间。        | `10s`                        |
+| 选项                                                        | 描述                    | 默认值              |
+|-------------------------------------------------------------|-----------------------|------------------|
+| `WithName(name string)`                                     | 设置消费者名称。              | `"CONSUMER"`     |
+| `WithGroup(group string)`                                   | 设置消费者组名称。             | `"CONSUMER-GROUP"` |
+| `WithWorkers(workers int)`                                  | 设置工作协程的数量。     | `0` (不限制)        |
+| `WithReadCount(readCount int64)`                            | 设置每次读取的消息数量。          | `10`             |
+| `WithBatchSize(batchSize int)`                              | 设置每批处理的处理器数量。         | `16`             |
+| `WithBlockTime(blockTime time.Duration)`                    | 设置读取消息时的阻塞时间。         | `5s`             |
+| `WithTimeout(timeout time.Duration)`                        | 设置自动认领消息的空闲超时时间。      | `300s`           |
+| `WithXautoClaimInterval(xautoClaimInterval time.Duration)`  | 设置自动认领的间隔时间。          | `5s`             |
+| `WithNoAck(noAck bool)`                                     | 如果设置为 `true`，则禁用消息确认。 | `false`          |
+| `WithSignals(signals ...os.Signal)`                         | 设置自定义的操作系统信号以监听关闭。    | `SIGTERM`        |
+| `WithExitWaitTime(exitWaitTime time.Duration)`              | 设置优雅关闭的最大等待时间。        | `10s`            |
 
 
 > See [example](/example)
