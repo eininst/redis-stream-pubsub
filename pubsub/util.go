@@ -88,7 +88,7 @@ func NewRedisClient(uri string) (*redis.Client, error) {
 	})
 
 	// Verify the connection by pinging the Redis server
-	if err := rcli.Ping(context.Background()).Err(); err != nil {
+	if err = rcli.Ping(context.Background()).Err(); err != nil {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
